@@ -48,7 +48,7 @@ def conv1d(x, scope, nf, std=0.02, relu=False, fast_gelu=False):
 
         # merge context and batch dims for more efficient matmul
         if ndims > 2:
-            y_shape = tf.concat([tf.shape(x)[: ndims - 1], [nf]], axis=0)
+            y_shape = tf.concat([x.shape[: ndims - 1], [nf]], axis=0)
             x = tf.reshape(x, [-1, nx])
 
         y = tf.matmul(x, w)

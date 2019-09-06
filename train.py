@@ -105,6 +105,7 @@ def calc_pad(args):
 
 def main():
     args = get_arguments()
+    dilation_rates = [2**i for i in range(args.wl + 1)]*2
     receptive_field = calc_pad(args)
     try:
         directories = validate_directories(args)
@@ -145,11 +146,8 @@ def main():
             receptive_field= receptive_field, # TODO: change receiptive field
             sample_size=args.sample_size,
             silence_threshold=silence_threshold)
-        audio_batch , bg = reader.dequeue()
-        if gc_enabled:
-            gc_id_batch = reader.dequeue_gc()
-        else:
-            gc_id_batch = None
+        
+        audio_batch, begin = reader.get_input_placeholder()
 
 
     if args.l2_regularization_strength == 0:
@@ -158,9 +156,8 @@ def main():
     g_step = tf.placeholder(dtype=tf.int32 , shape=None , name = 'step')
 
     loss = net.loss(audio_batch,
-                    bg,
+                    begin,
                     g_step,
-                    global_condition_batch=gc_id_batch,
                     l2_regularization_strength=args.l2_regularization_strength)
 
     optimizer = optimizer_factory[args.optimizer](
@@ -198,10 +195,10 @@ def main():
               "the previous model.")
         raise
 
-    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-    reader.start_threads(sess)
     step = None
     last_saved_step = saved_global_step
+    trainData_iter = reader.get_data_iterator('train')
+    valData_iter = reader.get_data_iterator('val')
     try:
         for step in range(saved_global_step + 1, args.num_steps):
             start_time = time.time()
@@ -222,7 +219,8 @@ def main():
             #     with open(timeline_path, 'w') as f:
             #         f.write(tl.generate_chrome_trace_format(show_memory=True))
             # else:
-            loss_value, _ = sess.run([loss, optim])
+            data_batch , bg = next(trainData_iter)
+            loss_value, _ = sess.run([loss, optim], feed_dict={audio_batch:data_batch, begin: bg})
             import pdb; pdb.set_trace()
                 
                 # writer.add_summary(summary, step)
@@ -242,8 +240,6 @@ def main():
     finally:
         if step > last_saved_step:
             save(saver, sess, logdir, step)
-        coord.request_stop()
-        coord.join(threads)
 
 
 if __name__ == '__main__':

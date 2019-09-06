@@ -7,7 +7,7 @@ def shape_list(x):
     deal with dynamic shape in tensorflow cleanly
     """
     ps = x.get_shape().as_list()
-    ts = tf.shape(x)
+    ts = x.shape
     return [ts[i] if ps[i] is None else ps[i] for i in range(len(ps))]
 
 

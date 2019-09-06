@@ -1,5 +1,5 @@
 import pdb
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import numpy as np
 from transformer import transformer_block
 # import tensorflow.keras.layers as layers 
@@ -24,7 +24,7 @@ class WaveNetBlock():
 
     def forward(self, x):
         skip_out = self.GLU(self.conv(x))
-        input_cut = x.shape[1].value - tf.shape(skip_out)[1]
+        input_cut = x.shape[1].value - skip_out.shape[1].value
         y = tf.slice(x, [0, input_cut, 0], [-1, -1, -1])
         return y + self.post_linear(skip_out), self.skip_conv(skip_out)
 
@@ -116,11 +116,33 @@ class SampleTransformer():
         self.final_wavenet = WaveNet(self.channel_size, self.channel_size, self.init_kernel_size, self.kernel_size, self.output_width2, self.dilation_rates)
         self.post_wavenet = tf.keras.layers.Conv1D(self.args.q_levels , kernel_size=1)
     
+    def forward(self, x, begin , g_step):
+        # x is T, B, C which is self attention friendly, wavenet and pooling layers get B, C, T
+        if begin == True:
+            self.memory.assign(tf.zeros_like(self.memory))
+        h = self.initial_wavenet.forward(x)
+        inputs = []
+        for d in range(self.depth):
+            h = self.down_path[d].forward(h, self.dropout_cache)
+            inputs.append(h)
+            h = self.down_sampling[d](h)
+        h_pre = h
+        h = self.middle_attention.forward(h, self.dropout_cache, self.memory)
+        self.memory[:, g_step%3].assign(h_pre)
+        inputs = inputs[::-1]
+        for d in range(self.depth):
+            h = self.up_sampling[d](h)
+            B , T , C = inputs[d].shape
+            p_s = np.prod(self.down_sampling_rates[-(d + 1):]) - 1
+            h = tf.concat([tf.zeros((B, p_s, C)), h[:, :-p_s]], axis = 1) + inputs[d]
+            h = self.up_path[d].forward(h, self.dropout_cache)
+        h = self.final_wavenet.forward(h)
+        return self.post_wavenet(h)
+        z
     def loss(self,
              input_batch,
              begin,
              g_step,
-             global_condition_batch=None,
              l2_regularization_strength=None,
              name='wavenet'):
     
@@ -137,7 +159,7 @@ class SampleTransformer():
             network_input = encoded
 
         # Cut off the last sample of network input to preserve causality.
-        network_input_width = tf.shape(network_input)[1] - 1
+        network_input_width = network_input.shape[1] - 1
         network_input = tf.slice(network_input, [0, 0, 0],
                                     [-1, network_input_width, -1])
         raw_output = self.forward(network_input, begin, g_step)
@@ -154,7 +176,7 @@ class SampleTransformer():
                                         [-1, self.args.q_levels])
             prediction = tf.reshape(raw_output,
                                     [-1, self.args.q_levels])
-            loss = tf.nn.softmax_cross_entropy_with_logits(
+            loss = tf.nn.softmax_cross_entropy_with_logits_v2(
                 logits=prediction,
                 labels=target_output)
             reduced_loss = tf.reduce_mean(loss)
@@ -178,27 +200,5 @@ class SampleTransformer():
 
                 return total_loss
 
-    def forward(self, x, begin , g_step):
-        # x is T, B, C which is self attention friendly, wavenet and pooling layers get B, C, T
-        if begin == True:
-            self.memory.assign(tf.zeros_like(self.memory))
-        h = self.initial_wavenet.forward(x)
-        inputs = []
-        for d in range(self.depth):
-            h = self.down_path[d].forward(h, self.dropout_cache)
-            inputs.append(h)
-            h = self.down_sampling[d](h)
-        h_pre = h
-        h = self.middle_attention.forward(h, self.dropout_cache, self.memory)
-        self.memory[:, g_step%3].assign(h_pre)
-        inputs = inputs[::-1]
-        for d in range(self.depth):
-            h = self.up_sampling[d](h)
-            B , T , C = inputs[d].shape
-            x = tf.concat([tf.zeros((B, np.prod(self.down_sampling_rates[-(d + 1):]) - 1, C)), inputs[d][:, np.prod(self.down_sampling_rates[-(d + 1):]) - 1:]], axis = 1)
-            h = h[:, :x.shape[1]]
-            h = self.up_path[d].forward(h + x, self.dropout_cache)
-        h = self.final_wavenet.forward(h)
-        return self.post_wavenet(h)
 
 

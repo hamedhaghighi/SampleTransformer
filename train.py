@@ -126,8 +126,6 @@ def main():
 
     ### modifying samle size to become square complete
     args.sample_size = args.sample_size - receptive_field//2
-    # Create coordinator.
-    coord = tf.train.Coordinator()
     # Create network.
     net = SampleTransformer(down_sampling_rates, dilation_rates, kernel_size, receptive_field, args)
     # Load raw waveform from VCTK corpus.
@@ -139,7 +137,6 @@ def main():
         gc_enabled = args.gc_channels is not None
         reader = AudioReader(
             args.data_dir,
-            coord,
             sample_rate=wavenet_params['sample_rate'],
             batch_size=args.batch_size,
             gc_enabled=gc_enabled,
@@ -159,13 +156,13 @@ def main():
                     begin,
                     g_step,
                     l2_regularization_strength=args.l2_regularization_strength)
-
-    optimizer = optimizer_factory[args.optimizer](
-                    learning_rate=args.learning_rate,
-                    momentum=args.momentum)
-    trainable = tf.trainable_variables()
-    optim = optimizer.minimize(loss, var_list=trainable)
-
+    bs.clear_bst_constants()
+    import pdb; pdb.set_trace()
+    params = tf.trainable_variables()
+    grads  = bs.gradients(loss, params)
+    global_norm, norm_scale = bs.clip_by_global_norm(grads, grad_scale=1.0, clip_norm=1.0)
+    adam = bs.AdamOptimizer(learning_rate=args.learning_rate, norm_scale=norm_scale, grad_scale=1.0, fp16=False)
+    train_op = adam.apply_gradients(zip(grads, params))
     # # Set up logging for TensorBoard.
     # writer = tf.summary.FileWriter(logdir)
     # writer.add_graph(tf.get_default_graph())
@@ -208,7 +205,7 @@ def main():
             #     run_options = tf.RunOptions(
             #         trace_level=tf.RunOptions.FULL_TRACE)
             #     # summary, loss_value, _ = sess.run(
-            #     #     [summaries, loss, optim],
+            #     #     [summaries, loss, train_op],
             #     #     options=run_options,
             #     #     run_metadata=run_metadata)
             #     # writer.add_summary(summary, step)
@@ -220,7 +217,7 @@ def main():
             #         f.write(tl.generate_chrome_trace_format(show_memory=True))
             # else:
             data_batch , bg = next(trainData_iter)
-            loss_value, _ = sess.run([loss, optim], feed_dict={audio_batch:data_batch, begin: bg})
+            loss_value, _, gn, ns = sess.run([loss, train_op, global_norm, norm_scale], feed_dict={audio_batch:data_batch, begin: bg})
             import pdb; pdb.set_trace()
                 
                 # writer.add_summary(summary, step)

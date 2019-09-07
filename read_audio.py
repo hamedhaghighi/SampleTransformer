@@ -75,7 +75,6 @@ class AudioReader(object):
 
     def __init__(self,
                  audio_dir,
-                 coord,
                  sample_rate,
                  batch_size,
                  gc_enabled,
@@ -86,7 +85,6 @@ class AudioReader(object):
         self.batch_size = batch_size
         self.audio_dir = audio_dir
         self.sample_rate = sample_rate
-        self.coord = coord
         self.sample_size = sample_size
         self.receptive_field = receptive_field
         self.silence_threshold = silence_threshold

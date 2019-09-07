@@ -1,9 +1,14 @@
 import sys
 import numpy as np
 import tensorflow as tf
+import blocksparse as bs
 from blocksparse import BlocksparseTransformer
 from sa_utils import shape_list, recomputable
 
+global bst_dict 
+bst_dict= {}
+global dropout_cache
+dropout_cache = dict()
 
 def get_attn_mask(n, attn_mode, local_attn_ctx=None):
     if attn_mode == 'all':
@@ -87,17 +92,22 @@ def attention_impl(q, k, v, heads, attn_mode, local_attn_ctx=None):
     return a
 
 
-@recomputable('blocksparse_attention_impl')
+#@recomputable('blocksparse_attention_impl')
 def blocksparse_attention_impl(q, k, v, heads, attn_mode, local_attn_ctx=None,
                                blocksize=32, num_verts=None, vertsize=None):
+    global bst_dict
     n_ctx = shape_list(q)[1]
+    assert shape_list(v)[1]%n_ctx == 0
     if attn_mode == 'strided':
         # Strided attention is implemented on the transposed matrix to provide greater block sparsity
         q = strided_transpose(q, n_ctx, local_attn_ctx, blocksize)
         k = strided_transpose(k, n_ctx, local_attn_ctx, blocksize)
         v = strided_transpose(v, n_ctx, local_attn_ctx, blocksize)
     n_state = shape_list(q)[-1] // heads
-    bst = get_blocksparse_obj(n_ctx, heads, attn_mode, blocksize, local_attn_ctx, num_verts, vertsize)
+    key = f'{local_attn_ctx}' + f'{n_ctx}' + attn_mode
+    if key not in bst_dict:
+        bst_dict[key]= get_blocksparse_obj(n_ctx, heads, attn_mode, blocksize, local_attn_ctx, num_verts, vertsize, shape_list(v)[1]//n_ctx - 1)
+    bst = bst_dict[key]
     scale_amount = tf.cast(1.0 / np.sqrt(n_state), tf.float32)
     w = bst.query_key_op(q, k)
     w = bst.masked_softmax(w, scale=scale_amount)
@@ -111,7 +121,7 @@ def blocksparse_attention_impl(q, k, v, heads, attn_mode, local_attn_ctx=None,
     return a
 
 
-def get_blocksparse_obj(n_ctx, n_heads, attn_mode, blocksize=32, local_attn_ctx=None, num_verts=4, vertsize=1):
+def get_blocksparse_obj(n_ctx, n_heads, attn_mode, blocksize=32, local_attn_ctx=None, num_verts=4, vertsize=1, n_memory=0):
     '''Defines the block-level sparsity pattern in the attention matrix. Enabled blocks
     will have the callback called on them in order to define a positionwise sparsity mask.'''
     n_bctx = n_ctx // blocksize
@@ -177,8 +187,8 @@ def get_blocksparse_obj(n_ctx, n_heads, attn_mode, blocksize=32, local_attn_ctx=
                 offset = q_idx % block_chunks
                 if k_idx + offset >= q_idx and k_idx <= q_idx:
                     layout[q_idx, k_idx] = 1
-    if attn_mode == 'all':
-        layout = np.concatenate([layout, np.ones((n_bctx , 3*n_bctx), dtype=np.bool)], axis = 1)
+    if attn_mode == 'all' and n_memory > 0:
+        layout = np.concatenate([layout, np.ones((n_bctx , n_memory*n_bctx), dtype=np.bool)], axis = 1)
     bst = BlocksparseTransformer(layout, block_size=blocksize,
                                  mask_callback=get_callback(attn_mode, local_attn_ctx),
                                  heads=n_heads)
@@ -215,44 +225,102 @@ def get_callback(attn_mode, local_attn_ctx=None):
     return cb
 
 
-if __name__ == '__main__':
-    n_batch = 4
-    n_ctx = 1024
-    n_embd = 256
-    is_fp16 = len(sys.argv) > 1 and sys.argv[1] == 'fp16'
+def layernorm(x, scope, epsilon=1e-5, relu=False):
+    """
+    normalize state vector to be zero mean / unit variance + learned scale/shift
+    """
+    n_state = x.shape[-1].value
+    with tf.variable_scope(scope):
+        gain = tf.get_variable('g', [n_state], initializer=tf.constant_initializer(1.0))
+        bias = tf.get_variable('b', [n_state], initializer=tf.constant_initializer(0.0))
+        return bs.layer_norm(x, gain, bias, axis=-1, epsilon=epsilon, relu=relu, use_tf=True)
 
-    dtype = tf.float16 if is_fp16 else tf.float32
-    blocksize = 32
-    # query, key, values should be batch x time x dim.
-    q = tf.random_normal(shape=[4, 1024, 256], dtype=dtype)
-    k = tf.random_normal(shape=[4, 1024, 256], dtype=dtype)
-    v = tf.random_normal(shape=[4, 1024, 256], dtype=dtype)
-    
-    full_attn_tf = attention_impl(q, k, v, heads=4, attn_mode="all", recompute=True)
-    full_attn_bs = blocksparse_attention_impl(q, k, v, heads=4, attn_mode="all", blocksize=blocksize, recompute=True)
-    
-    # # first step of strided attention
-    local_attn_bs = blocksparse_attention_impl(q, k, v, heads=4, attn_mode="local", local_attn_ctx=32, blocksize=blocksize, recompute=True)
-    local_attn_tf = attention_impl(q, k, v, heads=4, attn_mode="local", local_attn_ctx=32, recompute=True)
 
-    # # second step of strided attention
-    strided_attn_bs = blocksparse_attention_impl(q, k, v, heads=4, attn_mode="strided", local_attn_ctx=32, blocksize=blocksize, recompute=True)
-    strided_attn_tf = attention_impl(q, k, v, heads=4, attn_mode="strided", local_attn_ctx=32, recompute=True)
+def conv1d(x, scope, nf, std=0.02, relu=False, fast_gelu=False):
+    with tf.variable_scope(scope):
+        nx    = x.shape[-1].value
+        ndims = x.shape.ndims
 
-    # # # the 'fixed' attention pattern
-    fixed = blocksparse_attention_impl(q, k, v, heads=4, attn_mode="fixed", local_attn_ctx=128, num_verts=4, vertsize=1, blocksize=blocksize, recompute=True)
-    sess = tf.Session()
+        # Note: param initializers are not particularly well tuned in this code
+        w = tf.get_variable("w", [nx, nf], initializer=tf.random_normal_initializer(stddev=std), dtype=tf.float32)
+        b = tf.get_variable("b", [    nf], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
 
-    fatf, fabs, latf, labs, satf, sabs, fixed_bs = sess.run([
-        full_attn_tf, full_attn_bs, local_attn_tf, local_attn_bs, strided_attn_tf, strided_attn_bs, fixed])
+        # if hps.float16:
+        #     # We delay weight casting till just before use to minimize memory footprint.
+        #     # In recompute mode these casts are released just after use on forward pass,
+        #     # then remade on the recompute pass.
+        #     with tf.control_dependencies([x.op]):
+        #         # By setting dx_dtype to float16 we prevent useless casting back to fp32 in the backwards pass.
+        #         # Our all-reduce and fused optimizers can accept fp16 natively.
+        #         w = bs.float_cast(w, dtype=tf.float16, dx_dtype=tf.float16)
 
-    print(fatf[0])
-    print(fabs[0])
-    print('-----')
-    print(latf[0])
-    print(labs[0])
-    print('-----')
-    print(satf[0])
-    print(sabs[0])
-    print('-----')
-    print(fixed_bs[0])
+        # merge context and batch dims for more efficient matmul
+        if ndims > 2:
+            y_shape = tf.concat([x.shape[: ndims - 1], [nf]], axis=0)
+            x = tf.reshape(x, [-1, nx])
+
+        y = tf.matmul(x, w)
+
+        # avoid atomics in bias grad, but be careful as tf handles temp memory badly in the presense of async ops like all-reduce
+        y = bs.bias_relu(y, b, relu=relu, fast_gelu=fast_gelu, atomics=False)
+
+        if ndims > 2:
+            y = tf.reshape(y, y_shape)
+
+        return y
+
+
+
+
+@bs.recomputable
+def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
+    """
+    core component of transformer
+    performs attention + residual mlp + layer normalization
+    """
+    global dropout_cache
+    T = x.shape[1].value
+    if np.floor(np.sqrt(T)) == np.sqrt(T):
+        local_attn_ctx = np.sqrt(T).astype(np.int)
+    elif np.floor(np.sqrt(T*2)) == np.sqrt(T*2):
+        local_attn_ctx = np.sqrt(T*2).astype(np.int)
+    else:
+        raise ValueError('SIK TIR')
+    if memory != None:
+        B , N , T, C = memory.shape
+        memory = tf.reshape(memory , shape=(B, T*N, C))
+        x = tf.concat([x, memory], axis=1)
+    n_state = x.shape[-1].value
+
+    with tf.variable_scope(scope):
+
+        h = layernorm(x, "norm_a")
+        # h = x
+        q = conv1d(h[:, :T], 'proj_q', n_state)
+        k = conv1d(h, 'proj_k', n_state)
+        v = conv1d(h, 'proj_v', n_state)
+
+        # only need to create one bst per config
+        # we could pass this in as an external param but I like to keep the code more local
+        a = blocksparse_attention_impl(q, k, v, heads=4, attn_mode=mode, local_attn_ctx=local_attn_ctx, blocksize=32)
+        a = conv1d(a, 'proj_a', n_state, std=0.02/6) # TODO: correct num layers
+
+        if train and dp > 0.0:
+            # preserve the dropout mask through recompute
+            key = scope + "_dropout_a"
+            a, dropout_cache[key] = bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
+
+        # many basic tf ops are about half as fast as they should be in fp16
+        x = bs.add(x[:,:T], a)
+        m = layernorm(x, "norm_m")
+        # m=x
+        # fast_gelu: x * sigmoid(1.702 * x)
+        m = conv1d(m, 'proj_m1', n_state * mlp_ratio, fast_gelu=True)
+        m = conv1d(m, 'proj_m2', n_state)
+
+        if train and dp > 0.0:
+            # preserve the dropout mask through recompute
+            key = scope + "_dropout_m"
+            m, dropout_cache[key] = bs.dropout(m, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
+
+        return bs.add(x, m)

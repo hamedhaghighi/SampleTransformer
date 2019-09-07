@@ -1,6 +1,6 @@
 from __future__ import division
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 def create_adam_optimizer(learning_rate, momentum):
@@ -125,3 +125,51 @@ def mu_law_decode(output, quantization_channels):
         # Perform inverse of mu-law transformation.
         magnitude = (1 / mu) * ((1 + mu)**abs(signal) - 1)
         return tf.sign(signal) * magnitude
+
+class Conv1d(object):
+    def __init__(self, out_channel, kernel_size, name, dilation=1, padding = 'VALID'):
+        self.kernel_size = kernel_size
+        self.out_channel = out_channel
+        self.dilation = dilation
+        self.name = name
+        self.padding = padding
+    
+    def time_to_batch(self, value, dilation, name=None):
+        with tf.name_scope('time_to_batch'):
+            shape = tf.shape(value)
+            pad_elements = dilation - 1 - (shape[1] + dilation - 1) % dilation
+            padded = tf.pad(value, [[0, 0], [0, pad_elements], [0, 0]])
+            reshaped = tf.reshape(padded, [-1, dilation, shape[2]])
+            transposed = tf.transpose(reshaped, perm=[1, 0, 2])
+            return tf.reshape(transposed, [shape[0] * dilation, -1, shape[2]])
+
+
+    def batch_to_time(self, value, dilation, name=None):
+        with tf.name_scope('batch_to_time'):
+            shape = tf.shape(value)
+            prepared = tf.reshape(value, [dilation, -1, shape[2]])
+            transposed = tf.transpose(prepared, perm=[1, 0, 2])
+            return tf.reshape(transposed,
+                          [tf.div(shape[0], dilation), -1, shape[2]])
+
+    def __call__(self, value):
+        trainable = True
+        if len(tf.get_variable_scope().name.split('/')) > 1:
+            block_scope = tf.get_variable_scope().name.split('/')[1]
+            if block_scope == 'waveblock_3' and self.name=='post_conv':
+                trainable = False
+        W = tf.get_variable(self.name, shape=(self.kernel_size, value.shape[2].value, self.out_channel), dtype= tf.float32, trainable=trainable)
+        if self.dilation > 1:
+            transformed = self.time_to_batch(value, self.dilation)
+            conv = tf.nn.conv1d(transformed, W, stride=1, padding=self.padding)
+            restored = self.batch_to_time(conv, self.dilation)
+        else:
+            restored = tf.nn.conv1d(value, W, stride=1, padding=self.padding)
+        # Remove excess elements at the end.
+        
+        out_width = value.shape[1].value - (self.kernel_size - 1) * self.dilation
+        result = tf.slice(restored,
+                          [0, 0, 0],
+                          [-1, out_width, -1])
+        return result
+

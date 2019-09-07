@@ -1,20 +1,21 @@
 import pdb
 import tensorflow.compat.v1 as tf
 import numpy as np
-from transformer import transformer_block
+from attention import transformer_block
 # import tensorflow.keras.layers as layers 
-from ops import quantize, _one_hot
+from ops import quantize, _one_hot, Conv1d
 
 def mpad(tensor, dilation_rate, kernel_size):
     return tf.pad(tensor, [[0, 0], [dilation_rate * (kernel_size - 1), 0],[0,0]])
     
 class WaveNetBlock():
-    def __init__(self, in_channels, intermediate_channels, kernel_size, dilation_rate):
+    def __init__(self, in_channels, intermediate_channels, kernel_size, dilation_rate , scope):
+        self.scope = scope
         self.dilation_rate = dilation_rate
         self.kernel_size = kernel_size
-        self.conv = tf.keras.layers.Conv1D(intermediate_channels*2, kernel_size=self.kernel_size, dilation_rate= dilation_rate)
-        self.post_linear = tf.keras.layers.Conv1D(in_channels, kernel_size=1)
-        self.skip_conv = tf.keras.layers.Conv1D(in_channels, kernel_size=1)
+        self.conv = Conv1d(intermediate_channels*2, kernel_size=self.kernel_size, name='pre_conv', dilation=dilation_rate)
+        self.post_linear = Conv1d(in_channels, kernel_size=1, name='post_conv')
+        self.skip_conv = Conv1d(in_channels, kernel_size=1, name='skip_conv')
         
 
     def GLU(self, x):
@@ -23,36 +24,37 @@ class WaveNetBlock():
         return tf.sigmoid(g) * tf.tanh(f)
 
     def forward(self, x):
-        skip_out = self.GLU(self.conv(x))
-        input_cut = x.shape[1].value - skip_out.shape[1].value
-        y = tf.slice(x, [0, input_cut, 0], [-1, -1, -1])
-        return y + self.post_linear(skip_out), self.skip_conv(skip_out)
+        with tf.variable_scope(self.scope):
+            skip_out = self.GLU(self.conv(x))
+            input_cut = x.shape[1].value - skip_out.shape[1].value
+            y = tf.slice(x, [0, input_cut, 0], [-1, -1, -1])
+            return y + self.post_linear(skip_out), self.skip_conv(skip_out)
 
 
 class WaveNet():
-    def __init__(self, in_channels, intermediate_channels, kernel_size, init_kernel_size, output_width, dilation_rates=None):
+    def __init__(self, in_channels, intermediate_channels, kernel_size, init_kernel_size, output_width, scope, dilation_rates=None):
+        self.scope = scope
         self.output_width = output_width
         self.kernel_size = kernel_size
-        self.pre_net = tf.keras.layers.Conv1D(in_channels, kernel_size=init_kernel_size)
+        self.pre_net = Conv1d(in_channels, kernel_size=init_kernel_size, name='pre_net')
         self.wave_blocks = []
-        for d in dilation_rates:
-            self.wave_blocks.append(WaveNetBlock(in_channels, intermediate_channels, kernel_size, d))
-        self.post_net = tf.keras.Sequential([
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.Conv1D(in_channels, kernel_size=1),
-            tf.keras.layers.Activation('relu'),
-            tf.keras.layers.Conv1D(in_channels, kernel_size=1)
-        ])
+        for (i, d) in enumerate(dilation_rates):
+            scope = f'waveblock_{i}'
+            self.wave_blocks.append(WaveNetBlock(in_channels, intermediate_channels, kernel_size, d, scope))
+        self.post_net1 = Conv1d(in_channels, kernel_size=1, name='post_net1')
+        self.post_net2 = Conv1d(in_channels, kernel_size=1, name='post_net2')
 
     def forward(self, x):
-        h = self.pre_net(x)
-        skips = []
-        for wb in self.wave_blocks:
-            h, s = wb.forward(h)
-            skip_cut = s.shape[1].value - self.output_width
-            skips.append(tf.slice(s, [0, skip_cut, 0], [-1, -1, -1]))
-        h = tf.reduce_sum(tf.stack(skips, axis=0), axis=0)
-        return self.post_net(h)
+        with tf.variable_scope(self.scope):
+            h = self.pre_net(x)
+            skips = []
+            for wb in self.wave_blocks:
+                h, s = wb.forward(h)
+                skip_cut = s.shape[1].value - self.output_width
+                skips.append(tf.slice(s, [0, skip_cut, 0], [-1, -1, -1]))
+            h = tf.reduce_sum(tf.stack(skips, axis=0), axis=0)
+            h = tf.nn.relu(self.post_net1(h))
+            return tf.nn.relu(self.post_net2(h))
 
 
 
@@ -64,7 +66,7 @@ class MultiHeadSelfAttention():
         self.mlp_ratio = mlp_ratio
         self.block_size = block_size
         self.scope = name
-    def forward(self, x, dropout_cache, memory = None):
+    def forward(self, x, memory = None):
         # x is B T C
         if self.block_size != -1: 
             remainder = x.shape[1] % self.block_size
@@ -79,7 +81,7 @@ class MultiHeadSelfAttention():
             else:
                 mode = 'all'
             l_name = self.scope + '_' + str(k)
-            x = transformer_block(x , memory, scope = l_name, mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio, dropout_cache = dropout_cache)
+            x = transformer_block(x , memory, scope = l_name, mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio, recompute=True)
         if self.block_size != -1:
             x = tf.concat([x[i * B:(i + 1) * B] for i in range(x.shape[0] // B)], axis=1)
             if remainder != 0:
@@ -90,7 +92,6 @@ class MultiHeadSelfAttention():
 class SampleTransformer():
     def __init__(self, down_sampling_rates, dilation_rates, kernel_size, receptive_field, args):
         self.init_kernel_size = kernel_size if not args.scalar_input else args.init_kernel_size
-        self.dropout_cache = dict()
         self.args = args
         self.lbsa = args.lbsa
         self.lsa = args.lsa
@@ -105,16 +106,16 @@ class SampleTransformer():
         self.scalar_input = args.scalar_input
         self.output_width1 = self.sample_size + self.receptive_field//2
         self.output_width2 = self.sample_size
-        self.memory = tf.get_variable('memory', shape = (args.batch_size , 3 , self.output_width1//256 , self.channel_size), initializer=tf.zeros_initializer(), trainable=False)
-        self.initial_wavenet = WaveNet(self.channel_size, self.channel_size, self.kernel_size, self.init_kernel_size, self.output_width1, self.dilation_rates)
+        self.memory = tf.get_variable('memory', shape = (args.batch_size , args.n_memory , self.output_width1//np.prod(self.down_sampling_rates) , self.channel_size), initializer=tf.zeros_initializer(), trainable=False)
+        self.initial_wavenet = WaveNet(self.channel_size, self.channel_size, self.kernel_size, self.init_kernel_size, self.output_width1, 'wavenet1',  self.dilation_rates)
         self.depth = len(down_sampling_rates)
         self.down_path = [MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=1024 if i==0 else -1 , name = 'BSA' if i==0 else 'SA', mlp_ratio = 4, dp = 0.05, layers = self.lbsa if i==0 else self.lsa ) for (i, dsr) in enumerate(down_sampling_rates)]
         self.down_sampling = [tf.keras.layers.AveragePooling1D(dsr) for dsr in self.down_sampling_rates]
         self.middle_attention = MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=-1 , name = 'FA', mlp_ratio = 4, dp = 0.05, layers = self.lfa)
         self.up_sampling = [tf.keras.layers.UpSampling1D(dsr) for dsr in self.down_sampling_rates[::-1]]
         self.up_path = [MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=1024 if i==1 else -1 , name = 'UBSA' if i==1 else 'USA', mlp_ratio = 4, dp = 0.05, layers = self.lbsa if i==1 else self.lsa ) for (i, dsr) in enumerate(down_sampling_rates[::-1])]
-        self.final_wavenet = WaveNet(self.channel_size, self.channel_size, self.init_kernel_size, self.kernel_size, self.output_width2, self.dilation_rates)
-        self.post_wavenet = tf.keras.layers.Conv1D(self.args.q_levels , kernel_size=1)
+        self.final_wavenet = WaveNet(self.channel_size, self.channel_size, self.init_kernel_size, self.kernel_size, self.output_width2, 'wavenet2', self.dilation_rates)
+        self.post_wavenet = Conv1d(self.args.q_levels , kernel_size=1, name='post_wavenet')
     
     def forward(self, x, begin , g_step):
         # x is T, B, C which is self attention friendly, wavenet and pooling layers get B, C, T
@@ -123,22 +124,22 @@ class SampleTransformer():
         h = self.initial_wavenet.forward(x)
         inputs = []
         for d in range(self.depth):
-            h = self.down_path[d].forward(h, self.dropout_cache)
+            h = self.down_path[d].forward(h)
             inputs.append(h)
             h = self.down_sampling[d](h)
         h_pre = h
-        h = self.middle_attention.forward(h, self.dropout_cache, self.memory)
-        self.memory[:, g_step%3].assign(h_pre)
+        h = self.middle_attention.forward(h, self.memory)
+        self.memory[:, g_step%(self.memory.shape[1])].assign(h_pre)
         inputs = inputs[::-1]
         for d in range(self.depth):
             h = self.up_sampling[d](h)
             B , T , C = inputs[d].shape
             p_s = np.prod(self.down_sampling_rates[-(d + 1):]) - 1
             h = tf.concat([tf.zeros((B, p_s, C)), h[:, :-p_s]], axis = 1) + inputs[d]
-            h = self.up_path[d].forward(h, self.dropout_cache)
+            h = self.up_path[d].forward(h)
         h = self.final_wavenet.forward(h)
         return self.post_wavenet(h)
-        z
+
     def loss(self,
              input_batch,
              begin,

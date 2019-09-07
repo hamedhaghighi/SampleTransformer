@@ -19,6 +19,7 @@ METADATA = False
 dilation_rates = [2**i for i in range(9)]*2
 down_sampling_rates = [16, 16]
 kernel_size = 2
+
 def get_arguments():
     def _str_to_bool(s):
         """Convert string to bool (in argparse context)."""
@@ -37,7 +38,9 @@ def get_arguments():
     parser.add_argument('--lfa', type=int, default=16,
                         help='layers of full sparse attention')
     parser.add_argument('--wl', type=int, default=8,
-                        help='layers of wavenet')               
+                        help='layers of wavenet')
+    parser.add_argument('--n_memory', type=int, default=8,
+                        help='layers of wavenet')                
     parser.add_argument('--channel_size', type=int, default=128,
                         help='layers of full sparse attention')
     parser.add_argument('--init_kernel_size', type=int, default=32,

@@ -305,7 +305,7 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         a = blocksparse_attention_impl(q, k, v, heads=4, attn_mode=mode, local_attn_ctx=local_attn_ctx, blocksize=32)
         a = conv1d(a, 'proj_a', n_state, std=0.02/6) # TODO: correct num layers
 
-        if train and dp > 0.0:
+        if train==True and dp > 0.0:
             # preserve the dropout mask through recompute
             key = scope + "_dropout_a"
             a, dropout_cache[key] = bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
@@ -318,7 +318,7 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         m = conv1d(m, 'proj_m1', n_state * mlp_ratio, fast_gelu=True)
         m = conv1d(m, 'proj_m2', n_state)
 
-        if train and dp > 0.0:
+        if train==True and dp > 0.0:
             # preserve the dropout mask through recompute
             key = scope + "_dropout_m"
             m, dropout_cache[key] = bs.dropout(m, keep_prob=1.0 - dp, mask=dropout_cache.get(key))

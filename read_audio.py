@@ -103,6 +103,11 @@ class AudioReader(object):
         else:
             self.gc_category_cardinality = None
 
+    def get_len_dataset(self):
+        def compute_len(data_loader):
+            return (data_loader.shape[0]//self.batch_size)*(data_loader.shape[1]//self.sample_size)
+        return compute_len(self.train_data), compute_len(self.val_data)
+
     def get_input_placeholder(self):
         return (self.sample_placeholder, self.begin_placeholder)
 

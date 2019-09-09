@@ -156,7 +156,7 @@ class Conv1d(object):
         trainable = True
         if len(tf.get_variable_scope().name.split('/')) > 1:
             block_scope = tf.get_variable_scope().name.split('/')[1]
-            if block_scope == 'waveblock_3' and self.name=='post_conv':
+            if block_scope == 'waveblock_last' and self.name=='post_conv':
                 trainable = False
         W = tf.get_variable(self.name, shape=(self.kernel_size, value.shape[2].value, self.out_channel), dtype= tf.float32, trainable=trainable)
         if self.dilation > 1:

@@ -4,21 +4,18 @@ from ops import optimizer_factory
 BATCH_SIZE = 2
 DATA_DIRECTORY = '/home/oem/.tensorflow/music'
 LOGDIR_ROOT = './logdir'
-CHECKPOINT_EVERY = 50
-NUM_STEPS = int(1e5)
+PRINT_EVERY = 100
+NUM_EPOCHS = int(1e5)
 LEARNING_RATE = 1e-3
 WAVENET_PARAMS = './wavenet_params.json'
 SAMPLE_SIZE = 2**15
 L2_REGULARIZATION_STRENGTH = 0  
 SILENCE_THRESHOLD = 1e-4 # TODO: change it to 0.3
-EPSILON = 0.001
 MOMENTUM = 0.9
 MAX_TO_KEEP = 5
 METADATA = False
 
-dilation_rates = [2**i for i in range(9)]*2
-down_sampling_rates = [16, 16]
-kernel_size = 2
+
 
 def get_arguments():
     def _str_to_bool(s):
@@ -68,20 +65,18 @@ def get_arguments():
                         'output and generated model. These are stored '
                         'under the dated subdirectory of --logdir_root. '
                         'Cannot use with --logdir.')
-    parser.add_argument('--restore_from', type=str, default=None,
+    parser.add_argument('--load_type', type=str, default=None,
                         help='Directory in which to restore the model from. '
                         'This creates the new model under the dated directory '
                         'in --logdir_root. '
                         'Cannot use with --logdir.')
-    parser.add_argument('--checkpoint_every', type=int,
-                        default=CHECKPOINT_EVERY,
-                        help='How many steps to save each checkpoint after. Default: ' + str(CHECKPOINT_EVERY) + '.')
-    parser.add_argument('--num_steps', type=int, default=NUM_STEPS,
-                        help='Number of training steps. Default: ' + str(NUM_STEPS) + '.')
+    parser.add_argument('--print_every', type=int,
+                        default=PRINT_EVERY,
+                        help='How many steps to save each checkpoint after. Default: ' + str(PRINT_EVERY) + '.')
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='Number of training steps. Default: ' + str(NUM_EPOCHS) + '.')                    
     parser.add_argument('--learning_rate', type=float, default=LEARNING_RATE,
                         help='Learning rate for training. Default: ' + str(LEARNING_RATE) + '.')
-    parser.add_argument('--wavenet_params', type=str, default=WAVENET_PARAMS,
-                        help='JSON file with the network parameters. Default: ' + WAVENET_PARAMS + '.')
     parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
                         help='Concatenate and cut audio samples to this many '
                         'samples. Default: ' + str(SAMPLE_SIZE) + '.')
@@ -107,4 +102,6 @@ def get_arguments():
     parser.add_argument('--max_checkpoints', type=int, default=MAX_TO_KEEP,
                         help='Maximum amount of checkpoints that will be kept alive. Default: '
                              + str(MAX_TO_KEEP) + '.')
+    parser.add_argument('--fast', type=bool, default=False)
+
     return parser.parse_args()

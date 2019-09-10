@@ -19,7 +19,7 @@ class WaveNetBlock():
         
 
     def GLU(self, x):
-        B, T, C = x.shape
+        _, _, C = x.shape
         g, f = tf.split(x, [C.value//2, C.value//2], axis = 2)
         return tf.sigmoid(g) * tf.tanh(f)
 
@@ -53,8 +53,8 @@ class WaveNet():
                 skip_cut = s.shape[1].value - self.output_width
                 skips.append(tf.slice(s, [0, skip_cut, 0], [-1, -1, -1]))
             h = tf.reduce_sum(tf.stack(skips, axis=0), axis=0)
-            h = tf.nn.relu(self.post_net1(h))
-            return tf.nn.relu(self.post_net2(h))
+            h = self.post_net1(tf.nn.relu(h))
+            return self.post_net2(tf.nn.relu(h))
 
 
 

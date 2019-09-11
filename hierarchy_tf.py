@@ -67,7 +67,7 @@ class MultiHeadSelfAttention():
         self.block_size = block_size
         self.scope = name
     def forward(self, x, is_train, memory = None):
-        # x is B T C
+        # reshape to blocks before performing attention    
         if self.block_size != -1: 
             remainder = x.shape[1] % self.block_size
             if remainder != 0:
@@ -81,6 +81,7 @@ class MultiHeadSelfAttention():
             else:
                 mode = 'all'
             l_name = self.scope + '_' + str(k)
+            # main attention block
             x = transformer_block(x , memory, scope = l_name, mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio, train=is_train, recompute=True)
         if self.block_size != -1:
             x = tf.concat([x[i * B:(i + 1) * B] for i in range(x.shape[0] // B)], axis=1)
@@ -110,18 +111,18 @@ class SampleTransformer():
             self.memory = tf.get_variable('mem', shape = (args.batch_size , args.n_memory , self.output_width1//np.prod(self.down_sampling_rates) , self.channel_size), initializer=tf.zeros_initializer(), trainable=False)
         self.initial_wavenet = WaveNet(self.channel_size, self.channel_size, self.kernel_size, self.init_kernel_size, self.output_width1, 'wavenet1',  self.dilation_rates)
         self.depth = len(down_sampling_rates)
-        self.down_path = [MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=1024 if i==0 else -1 , name = 'BSA' if i==0 else 'SA', mlp_ratio = 4, dp = 0.05, layers = self.lbsa if i==0 else self.lsa ) for (i, dsr) in enumerate(down_sampling_rates)]
+        self.down_path = [MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=1024 \
+            if i==0 else -1 , name = 'BSA' if i==0 else 'SA', mlp_ratio = 4, dp = 0.05, layers = self.lbsa if i==0 else self.lsa ) for (i, dsr) in enumerate(down_sampling_rates)]
         self.down_sampling = [tf.keras.layers.AveragePooling1D(dsr) for dsr in self.down_sampling_rates]
         self.middle_attention = MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=-1 , name = 'FA', mlp_ratio = 4, dp = 0.05, layers = self.lfa)
         self.up_sampling = [tf.keras.layers.UpSampling1D(dsr) for dsr in self.down_sampling_rates[::-1]]
-        self.up_path = [MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=1024 if i==1 else -1 , name = 'UBSA' if i==1 else 'USA', mlp_ratio = 4, dp = 0.05, layers = self.lbsa if i==1 else self.lsa ) for (i, dsr) in enumerate(down_sampling_rates[::-1])]
+        self.up_path = [MultiHeadSelfAttention(self.channel_size, self.channel_size, block_size=1024 \
+            if i==1 else -1 , name = 'UBSA' if i==1 else 'USA', mlp_ratio = 4, dp = 0.05, layers = self.lbsa if i==1 else self.lsa ) for (i, dsr) in enumerate(down_sampling_rates[::-1])]
         self.final_wavenet = WaveNet(self.channel_size, self.channel_size, self.init_kernel_size, self.kernel_size, self.output_width2, 'wavenet2', self.dilation_rates)
         self.post_wavenet = Conv1d(self.args.q_levels , kernel_size=1, name='post_wavenet')
     
     def forward(self, x, begin , g_step, is_train):
-        # x is T, B, C which is self attention friendly, wavenet and pooling layers get B, C, T
-        if begin == True:
-            self.memory.assign(tf.zeros_like(self.memory))
+        _ = tf.cond(begin, lambda: self.memory.assign(tf.zeros_like(self.memory)) , lambda: 0.0)
         h = self.initial_wavenet.forward(x)
         inputs = []
         for d in range(self.depth):

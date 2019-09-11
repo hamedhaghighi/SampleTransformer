@@ -303,12 +303,13 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         # only need to create one bst per config
         # we could pass this in as an external param but I like to keep the code more local
         a = blocksparse_attention_impl(q, k, v, heads=4, attn_mode=mode, local_attn_ctx=local_attn_ctx, blocksize=32)
+        
         a = conv1d(a, 'proj_a', n_state, std=0.02/6) # TODO: correct num layers
-
-        if train==True and dp > 0.0:
+        
+        if dp > 0.0:
             # preserve the dropout mask through recompute
             key = scope + "_dropout_a"
-            a, dropout_cache[key] = bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
+            a, dropout_cache[key] = tf.cond(train, lambda : bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key)), lambda: (tf.identity(a), tf.zeros_like(a, dtype=tf.int32)))
 
         # many basic tf ops are about half as fast as they should be in fp16
         x = bs.add(x[:,:T], a)
@@ -318,9 +319,9 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         m = conv1d(m, 'proj_m1', n_state * mlp_ratio, fast_gelu=True)
         m = conv1d(m, 'proj_m2', n_state)
 
-        if train==True and dp > 0.0:
+        if dp > 0.0:
             # preserve the dropout mask through recompute
             key = scope + "_dropout_m"
-            m, dropout_cache[key] = bs.dropout(m, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
+            a, dropout_cache[key] = tf.cond(train, lambda: bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key)), lambda:(tf.identity(a), tf.zeros_like(a, dtype=tf.int32)))
 
         return bs.add(x, m)

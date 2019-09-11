@@ -105,15 +105,16 @@ def quantize(data, q_levels, q_type):
     """
     One of 'linear', 'a-law', 'mu-law' for q_type.
     """
-    data = tf.cast(data, tf.float64)
-    data = data - tf.reduce_min(data, axis = 1, keepdims=True)
-    data = data / tf.reduce_max(data, axis = 1, keepdims=True)
     if q_type == 'linear':
+        data = tf.cast(data, tf.float64)
+        data = data - tf.reduce_min(data, axis = 1, keepdims=True)
+        data = data / tf.reduce_max(data, axis = 1, keepdims=True)
         return __linear_quantize(data, q_levels)
     if q_type == 'a-law':
         return __a_law_quantize(data)
     if q_type == 'mu-law':
-        return mu_law_encode(data)
+        return mu_law_encode(data, q_levels)
+
     raise NotImplementedError
 
 def mu_law_decode(output, quantization_channels):

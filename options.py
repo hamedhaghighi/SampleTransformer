@@ -36,7 +36,7 @@ def get_arguments():
                         help='layers of full sparse attention')
     parser.add_argument('--wl', type=int, default=8,
                         help='layers of wavenet')
-    parser.add_argument('--n_memory', type=int, default=8,
+    parser.add_argument('--n_memory', type=int, default=3,
                         help='layers of wavenet')                
     parser.add_argument('--channel_size', type=int, default=128,
                         help='layers of full sparse attention')

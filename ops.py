@@ -79,7 +79,7 @@ def __linear_quantize(data, q_levels):
     floats in (0, 1) to ints in [0, q_levels-1]
     scales normalized across axis 1
     """
-    eps = tf.constant(1e-5, dtype=tf.float64)
+    eps = tf.constant(1e-5, dtype=tf.float32)
     data *= (q_levels - eps)
     data += eps/2
     data =tf.cast(data , dtype=tf.int32)

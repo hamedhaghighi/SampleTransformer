@@ -113,8 +113,8 @@ class AudioReader(object):
 
     def get_data_iterator(self , mode):
         total_audio = self.train_data if mode == 'train' else self.val_data
-        np.random.shuffle(total_audio)
         while True:
+            np.random.shuffle(total_audio)
             for i in range(len(total_audio)// self.batch_size):
                 audio = total_audio[i*self.batch_size: (i+1)*self.batch_size]
                 if self.silence_threshold is not None:

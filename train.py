@@ -208,7 +208,6 @@ class Train():
         step = self.saved_global_step
         for _ in range(n_steps):
             data_batch , bg = next(data_iter)
-            # import pdb; pdb.set_trace()
             feed_dict={self.audio_batch:data_batch, self.begin: bg}
             if is_train:
                 loss_value, _ = self.sess.run([self.loss_train, self.train_op], feed_dict=feed_dict)

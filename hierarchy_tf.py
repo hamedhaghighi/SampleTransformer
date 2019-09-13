@@ -1,5 +1,5 @@
 import pdb
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 import numpy as np
 from attention import transformer_block
 # import tensorflow.keras.layers as layers 
@@ -45,7 +45,7 @@ class WaveNet():
         self.post_net2 = Conv1d(in_channels, kernel_size=1, name='post_net2')
 
     def forward(self, x):
-        with tf.variable_scope(self.scope):
+        with tf.variable_scope(self.scope, reuse=tf.AUTO_REUSE):
             h = self.pre_net(x)
             skips = []
             for wb in self.wave_blocks:
@@ -82,7 +82,7 @@ class MultiHeadSelfAttention():
                 mode = 'all'
             l_name = self.scope + '_' + str(k)
             # main attention block
-            x = transformer_block(x , memory, scope = l_name, mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio, train=is_train, recompute=True)
+            x = transformer_block(x , memory, scope = l_name , mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio, train=is_train, recompute=is_train)
         if self.block_size != -1:
             x = tf.concat([x[i * B:(i + 1) * B] for i in range(x.shape[0] // B)], axis=1)
             if remainder != 0:
@@ -107,7 +107,7 @@ class SampleTransformer():
         self.scalar_input = args.scalar_input
         self.output_width1 = self.sample_size + self.receptive_field//2
         self.output_width2 = self.sample_size
-        with tf.variable_scope('memroy' , reuse=False):
+        with tf.variable_scope('memroy' , reuse=tf.AUTO_REUSE):
             self.memory = tf.get_variable('mem', shape = (args.batch_size , args.n_memory , self.output_width1//np.prod(self.down_sampling_rates) , self.channel_size), initializer=tf.zeros_initializer(), trainable=False)
         self.initial_wavenet = WaveNet(self.channel_size, self.channel_size, self.kernel_size, self.init_kernel_size, self.output_width1, 'wavenet1',  self.dilation_rates)
         self.depth = len(down_sampling_rates)
@@ -140,7 +140,9 @@ class SampleTransformer():
             h = tf.concat([tf.zeros((B, p_s, C)), h[:, :-p_s]], axis = 1) + inputs[d]
             h = self.up_path[d].forward(h, is_train)
         h = self.final_wavenet.forward(h)
-        return self.post_wavenet(h)
+        with tf.variable_scope('post' , reuse=tf.AUTO_REUSE):
+            return self.post_wavenet(h)
+        
 
     def loss(self,
              input_batch,

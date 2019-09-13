@@ -1,18 +1,18 @@
 import argparse
 from ops import optimizer_factory
 
-BATCH_SIZE = 2
+BATCH_SIZE = 1
 DATA_DIRECTORY = '/home/oem/.tensorflow/music'
 LOGDIR_ROOT = './logdir'
 PRINT_EVERY = 100
-NUM_EPOCHS = int(1e5)
+NUM_EPOCHS = 100
 LEARNING_RATE = 1e-3
 WAVENET_PARAMS = './wavenet_params.json'
 SAMPLE_SIZE = 2**15
 L2_REGULARIZATION_STRENGTH = 0  
 SILENCE_THRESHOLD = 1e-4 # TODO: change it to 0.3
 MOMENTUM = 0.9
-MAX_TO_KEEP = 5
+MAX_TO_KEEP = 3
 METADATA = False
 
 
@@ -46,14 +46,10 @@ def get_arguments():
                         help='layers of full sparse attention')
     parser.add_argument('--q_type', type=str, default='linear',
                         help='layers of full sparse attention')
-    parser.add_argument('--scalar_input', type=bool, default=False,
+    parser.add_argument('--scalar_input', action="store_true", default=False,
                         help='layers of full sparse attention')
     parser.add_argument('--data_dir', type=str, default=DATA_DIRECTORY,
                         help='The directory containing the VCTK corpus.')
-    parser.add_argument('--store_metadata', type=bool, default=METADATA,
-                        help='Whether to store advanced debugging information '
-                        '(execution time, memory consumption) for use with '
-                        'TensorBoard. Default: ' + str(METADATA) + '.')
     parser.add_argument('--logdir', type=str, default=None,
                         help='Directory in which to store the logging '
                         'information for TensorBoard. '
@@ -73,7 +69,7 @@ def get_arguments():
     parser.add_argument('--print_every', type=int,
                         default=PRINT_EVERY,
                         help='How many steps to save each checkpoint after. Default: ' + str(PRINT_EVERY) + '.')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=NUM_EPOCHS,
                         help='Number of training steps. Default: ' + str(NUM_EPOCHS) + '.')                    
     parser.add_argument('--learning_rate', type=float, default=LEARNING_RATE,
                         help='Learning rate for training. Default: ' + str(LEARNING_RATE) + '.')
@@ -102,6 +98,6 @@ def get_arguments():
     parser.add_argument('--max_checkpoints', type=int, default=MAX_TO_KEEP,
                         help='Maximum amount of checkpoints that will be kept alive. Default: '
                              + str(MAX_TO_KEEP) + '.')
-    parser.add_argument('--fast', type=bool, default=False)
+    parser.add_argument('--fast', action="store_true", default=False)
 
     return parser.parse_args()

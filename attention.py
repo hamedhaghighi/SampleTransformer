@@ -292,7 +292,7 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         x = tf.concat([x, memory], axis=1)
     n_state = x.shape[-1].value
 
-    with tf.variable_scope(scope):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
 
         h = layernorm(x, "norm_a")
         # h = x
@@ -306,11 +306,10 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         
         a = conv1d(a, 'proj_a', n_state, std=0.02/6) # TODO: correct num layers
         
-        if dp > 0.0:
+        if train and dp > 0.0:
             # preserve the dropout mask through recompute
             key = scope + "_dropout_a"
-            a, dropout_cache[key] = tf.cond(train, lambda : bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key)), lambda: (tf.identity(a), tf.zeros_like(a, dtype=tf.int32)))
-
+            a, dropout_cache[key] = bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
         # many basic tf ops are about half as fast as they should be in fp16
         x = bs.add(x[:,:T], a)
         m = layernorm(x, "norm_m")
@@ -319,9 +318,9 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         m = conv1d(m, 'proj_m1', n_state * mlp_ratio, fast_gelu=True)
         m = conv1d(m, 'proj_m2', n_state)
 
-        if dp > 0.0:
+        if train and dp > 0.0:
             # preserve the dropout mask through recompute
             key = scope + "_dropout_m"
-            a, dropout_cache[key] = tf.cond(train, lambda: bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key)), lambda:(tf.identity(a), tf.zeros_like(a, dtype=tf.int32)))
+            a, dropout_cache[key] = bs.dropout(a, keep_prob=1.0 - dp, mask=dropout_cache.get(key))
 
         return bs.add(x, m)

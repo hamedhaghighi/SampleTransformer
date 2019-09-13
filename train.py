@@ -96,7 +96,8 @@ class Train():
         ### modifying samle size to become square complete
         self.args.sample_size = self.args.sample_size - self.receptive_field//2
         # Create network.
-        self.net = SampleTransformer(self.down_sampling_rates, self.dilation_rates, self.kernel_size, self.receptive_field, self.args)
+        self.net_train = SampleTransformer(self.down_sampling_rates, self.dilation_rates, self.kernel_size, self.receptive_field, self.args)
+        # self.net_val = SampleTransformer(self.down_sampling_rates, self.dilation_rates, self.kernel_size, self.receptive_field, self.args)
         # Load raw waveform from VCTK corpus.
         
         with tf.name_scope('create_inputs'):
@@ -123,18 +124,23 @@ class Train():
             args.l2_regularization_strength = None
         
         self.g_step = tf.placeholder(dtype=tf.int32 , shape=None , name = 'step')
-        self.is_train = tf.placeholder(dtype=tf.bool, shape=None, name='is_train')
-        self.loss = self.net.loss(self.audio_batch,
+        self.loss_train = self.net_train.loss(self.audio_batch,
                         self.begin,
                         self.g_step,
-                        self.is_train,
+                        True,
                         l2_regularization_strength=args.l2_regularization_strength)
+        
         bs.clear_bst_constants()
         params = tf.trainable_variables()
-        grads  = bs.gradients(self.loss, params)
+        grads  = bs.gradients(self.loss_train, params)
         self.global_norm, self.norm_scale = bs.clip_by_global_norm(grads, grad_scale=1.0, clip_norm=1.0)
         adam = bs.AdamOptimizer(learning_rate=self.args.learning_rate, norm_scale=self.norm_scale, grad_scale=1.0, fp16=False)
         self.train_op = adam.apply_gradients(zip(grads, params))
+        self.loss_val = self.net_train.loss(self.audio_batch,
+                        self.begin,
+                        self.g_step,
+                        False,
+                        l2_regularization_strength=args.l2_regularization_strength)
         # Restoring ...
         with tf.variable_scope('memroy' , reuse=True):
             memory = tf.get_variable('mem')
@@ -156,13 +162,8 @@ class Train():
                 "We will terminate training to avoid accidentally overwriting "
                 "the previous model.")
             raise
-        # # Set up logging for TensorBoard.
-        # summary_name = 'train' if self.is_train == True else 'validation'
-        # tf.summary.scalar(summary_name, self.loss)  
         self.summary_writer = tf.summary.FileWriter(os.path.join(self.logdir, STARTED_DATESTRING))
-        # writer.add_graph(tf.get_default_graph())
-        # run_metadata = tf.RunMetadata()
-        # self.summaries = tf.summary.merge_all()
+       
         
     # Set up session
     def calc_pad(self, args):
@@ -207,11 +208,12 @@ class Train():
         step = self.saved_global_step
         for _ in range(n_steps):
             data_batch , bg = next(data_iter)
-            feed_dict={self.audio_batch:data_batch, self.begin: bg, self.is_train:is_train}
+            # import pdb; pdb.set_trace()
+            feed_dict={self.audio_batch:data_batch, self.begin: bg}
             if is_train:
-                loss_value, _ = self.sess.run([self.loss, self.train_op], feed_dict=feed_dict)
+                loss_value, _ = self.sess.run([self.loss_train, self.train_op], feed_dict=feed_dict)
             else:
-                loss_value = self.sess.run(self.loss, feed_dict=feed_dict)
+                loss_value = self.sess.run(self.loss_val, feed_dict=feed_dict)
             total_loss = np.append(total_loss, loss_value)
             print_every = 1  if self.args.fast else self.args.print_every
             if step%(print_every)==0 and is_train:

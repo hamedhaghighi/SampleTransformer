@@ -40,7 +40,7 @@ def batch_to_time(value, dilation, name=None):
         prepared = tf.reshape(value, [dilation, -1, shape[2]])
         transposed = tf.transpose(prepared, perm=[1, 0, 2])
         return tf.reshape(transposed,
-                          [tf.div(shape[0], dilation), -1, shape[2]])
+                          [tf.math.divide(shape[0], dilation), -1, shape[2]])
 
 
 def causal_conv(value, filter_, dilation, name='causal_conv'):
@@ -106,7 +106,7 @@ def quantize(data, q_levels, q_type):
     One of 'linear', 'a-law', 'mu-law' for q_type.
     """
     if q_type == 'linear':
-        data = tf.cast(data, tf.float64)
+        data = tf.cast(data, tf.float32)
         data = data - tf.reduce_min(data, axis = 1, keepdims=True)
         data = data / tf.reduce_max(data, axis = 1, keepdims=True)
         return __linear_quantize(data, q_levels)
@@ -151,7 +151,7 @@ class Conv1d(object):
             prepared = tf.reshape(value, [dilation, -1, shape[2]])
             transposed = tf.transpose(prepared, perm=[1, 0, 2])
             return tf.reshape(transposed,
-                          [tf.div(shape[0], dilation), -1, shape[2]])
+                          [tf.math.divide(shape[0], dilation), -1, shape[2]])
 
     def __call__(self, value):
         trainable = True

@@ -15,6 +15,7 @@ from hierarchy_tf import SampleTransformer
 import numpy as np
 import blocksparse as bs
 import shutil
+from tqdm import tqdm
 
 STARTED_DATESTRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
 EPSILON = 0.001
@@ -124,6 +125,7 @@ class Train():
             args.l2_regularization_strength = None
         
         self.g_step = tf.placeholder(dtype=tf.int32 , shape=None , name = 'step')
+        self.lr = tf.placeholder(dtype=tf.float32 , shape=None , name = 'learning_rate')
         self.loss_train = self.net_train.loss(self.audio_batch,
                         self.begin,
                         self.g_step,
@@ -134,7 +136,7 @@ class Train():
         params = tf.trainable_variables()
         grads  = bs.gradients(self.loss_train, params)
         self.global_norm, self.norm_scale = bs.clip_by_global_norm(grads, grad_scale=1.0, clip_norm=1.0)
-        adam = bs.AdamOptimizer(learning_rate=self.args.learning_rate, norm_scale=self.norm_scale, grad_scale=1.0, fp16=False)
+        adam = bs.AdamOptimizer(learning_rate=self.lr, norm_scale=self.norm_scale, grad_scale=1.0, fp16=False)
         self.train_op = adam.apply_gradients(zip(grads, params))
         self.loss_val = self.net_train.loss(self.audio_batch,
                         self.begin,
@@ -163,6 +165,12 @@ class Train():
                 "the previous model.")
             raise
         self.summary_writer = tf.summary.FileWriter(os.path.join(self.logdir, STARTED_DATESTRING))
+        open_type = 'a' if os.path.exists(self.logdir + '/log.txt') else 'w'
+        self.log_file = open(self.logdir + '/log.txt', open_type)
+        with open(self.logdir + '/config.txt', open_type) as f:
+            f.write(STARTED_DATESTRING + '\n\n')
+            for arg in vars(self.args):
+                f.write('{}: {}\n'.format(arg, getattr(self.args, arg)))
        
         
     # Set up session
@@ -195,37 +203,49 @@ class Train():
     def get_global_step(self):
         return self.saved_global_step
 
-    def summarize(self, tag, value, step):
+    def get_log_file(self):
+        return self.log_file
+
+    def summarize(self, tag, value, lr, step):
+        log_str = '{}: step {:d}- lr = {:.3f}- loss = {:.3f}\n'.format(tag, step, lr, value)
+        print(log_str)
+        self.log_file.write(log_str)
         summary_str = tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value), ])
         self.summary_writer.add_summary(summary_str, step)
 
+    def close_files(self):
+        self.log_file.close()
+        self.summary_writer.close()
+
     def train(self, n_steps, is_train):
         
-        # Saver for storing checkpoints of the model.
         step = None
         data_iter = self.trainData_iter if is_train else self.valData_iter
         total_loss = np.array([])
         step = self.saved_global_step
-        for _ in range(n_steps):
+        for _ in tqdm(range(n_steps), dynamic_ncols=True, desc='Train: ' if is_train else 'Val:'):
             data_batch , bg = next(data_iter)
+            decayed_learning_rate = self.args.learning_rate * self.args.decay_rate**(step // self.args.decay_steps)
             feed_dict={self.audio_batch:data_batch, self.begin: bg}
             if is_train:
-                loss_value, _ = self.sess.run([self.loss_train, self.train_op], feed_dict=feed_dict)
+                feed_dict[self.lr] = decayed_learning_rate
+                loss_value, lr, _ = self.sess.run([self.loss_train, self.lr, self.train_op], feed_dict=feed_dict)
             else:
-                loss_value = self.sess.run(self.loss_val, feed_dict=feed_dict)
+                loss_value, lr = self.sess.run([self.loss_val, self.lr], feed_dict=feed_dict)
             total_loss = np.append(total_loss, loss_value)
             print_every = 1  if self.args.fast else self.args.print_every
+            ## summarizeing ...
             if step%(print_every)==0 and is_train:
-                print('Train: step {:d} - loss = {:.3f}'.format(step, total_loss.mean()))
-                self.summarize('train' , total_loss.mean(), step)
+                self.summarize('Train' , total_loss.mean(), lr, step)
+            ## saving last model ...
+            if step%(self.args.checkpoint_every)==0: 
+                save(self.saver, self.sess, self.logdir, step, self.best_val_loss, 'last')
             step = (step + 1) if is_train else step
+        ## saving best model based on best validation loss
         if not is_train:
-            print('Validation: step {:d} - loss = {:.3f}'.format(step, total_loss.mean()))
-            self.summarize('validation', total_loss.mean(), step)  
-        ## save model ...        
-        if not is_train: 
             if total_loss.mean() < self.best_val_loss:
-                self.best_val_loss = total_loss.mean()
-                save(self.saver, self.sess, self.logdir, step, self.best_val_loss, 'best')
-            save(self.saver, self.sess, self.logdir, step, self.best_val_loss, 'last')
+                    self.best_val_loss = total_loss.mean()
+                    save(self.saver, self.sess, self.logdir, step, self.best_val_loss, 'best')
+            self.summarize('Validation' , total_loss.mean(), lr, step) 
+        ## change global step       
         self.saved_global_step = step

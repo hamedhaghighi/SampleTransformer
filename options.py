@@ -6,7 +6,7 @@ DATA_DIRECTORY = '/home/oem/.tensorflow/music'
 LOGDIR_ROOT = './logdir'
 PRINT_EVERY = 100
 NUM_EPOCHS = 100
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 5e-4
 WAVENET_PARAMS = './wavenet_params.json'
 SAMPLE_SIZE = 2**15
 L2_REGULARIZATION_STRENGTH = 0  
@@ -14,8 +14,9 @@ SILENCE_THRESHOLD = 1e-4 # TODO: change it to 0.3
 MOMENTUM = 0.9
 MAX_TO_KEEP = 3
 METADATA = False
-
-
+DECAY_STEPS = 1000
+DECAY_RATE = 0.96
+CHECKPOINT_EVERY = 2000
 
 def get_arguments():
     def _str_to_bool(s):
@@ -69,6 +70,9 @@ def get_arguments():
     parser.add_argument('--print_every', type=int,
                         default=PRINT_EVERY,
                         help='How many steps to save each checkpoint after. Default: ' + str(PRINT_EVERY) + '.')
+    parser.add_argument('--checkpoint_every', type=int,
+                        default=CHECKPOINT_EVERY,
+                        help='How many steps to save each checkpoint after. Default: ' + str(CHECKPOINT_EVERY) + '.')
     parser.add_argument('--epochs', type=int, default=NUM_EPOCHS,
                         help='Number of training steps. Default: ' + str(NUM_EPOCHS) + '.')                    
     parser.add_argument('--learning_rate', type=float, default=LEARNING_RATE,
@@ -76,6 +80,10 @@ def get_arguments():
     parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
                         help='Concatenate and cut audio samples to this many '
                         'samples. Default: ' + str(SAMPLE_SIZE) + '.')
+    parser.add_argument('--decay_steps', type=int, default=DECAY_STEPS,
+                        help='.')
+    parser.add_argument('--decay_rate', type=float, default=DECAY_RATE,
+                        help='.')
     parser.add_argument('--l2_regularization_strength', type=float,
                         default=L2_REGULARIZATION_STRENGTH,
                         help='Coefficient in the L2 regularization. '
@@ -99,5 +107,6 @@ def get_arguments():
                         help='Maximum amount of checkpoints that will be kept alive. Default: '
                              + str(MAX_TO_KEEP) + '.')
     parser.add_argument('--fast', action="store_true", default=False)
+
 
     return parser.parse_args()

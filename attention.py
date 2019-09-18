@@ -4,6 +4,8 @@ import tensorflow as tf
 import blocksparse as bs
 from blocksparse import BlocksparseTransformer
 from sa_utils import shape_list, recomputable
+from tensor2tensor.layers import common_layers
+import math
 
 global bst_dict 
 bst_dict= {}
@@ -270,10 +272,45 @@ def conv1d(x, scope, nf, std=0.02, relu=False, fast_gelu=False):
         return y
 
 
+def add_timing_signal_1d_given_position(x,
+                                        position,
+                                        min_timescale=1.0,
+                                        max_timescale=1.0e4):
+  """Adds sinusoids of diff frequencies to a Tensor, with timing position given.
 
+  Args:
+    x: a Tensor with shape [batch, length, channels]
+    position: a Tensor with shape [batch, length]
+    min_timescale: a float
+    max_timescale: a float
+
+  Returns:
+    a Tensor the same shape as x.
+  """
+  channels = common_layers.shape_list(x)[2]
+  num_timescales = channels // 2
+  log_timescale_increment = (
+      math.log(float(max_timescale) / float(min_timescale)) /
+      (tf.to_float(num_timescales) - 1))
+  inv_timescales = min_timescale * tf.exp(
+      tf.to_float(tf.range(num_timescales)) * -log_timescale_increment)
+  scaled_time = (
+      tf.expand_dims(tf.to_float(position), 2) * tf.expand_dims(
+          tf.expand_dims(inv_timescales, 0), 0))
+  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=2)
+  signal = tf.pad(signal, [[0, 0], [0, 0], [0, tf.mod(channels, 2)]])
+  signal = common_layers.cast_like(signal, x)
+  return signal
+
+
+def add_positional_encoding(tag, x, start, limit, n_attention_layers):
+    t = add_timing_signal_1d_given_position(x , tf.expand_dims(tf.range(start=start, limit=limit), axis=0))
+    PW = tf.get_variable(name='positional_weight_' + tag, shape=(x.shape[-1].value, x.shape[-1].value),initializer=tf.random_normal_initializer(stddev=0.02/n_attention_layers), dtype=tf.float32)
+    t = tf.einsum('btc, cd->btd', t, PW)
+    return x + t
 
 @bs.recomputable
-def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
+def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, n_attention_layers, train=True):
     """
     core component of transformer
     performs attention + residual mlp + layer normalization
@@ -287,8 +324,8 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
     else:
         raise ValueError('SIK TIR')
     if memory != None:
-        B , N , T, C = memory.shape
-        memory = tf.reshape(memory , shape=(B, T*N, C))
+        B , N , T_p, C = memory.shape
+        memory = tf.reshape(memory , shape=(B, T_p*N, C))
         x = tf.concat([x, memory], axis=1)
     n_state = x.shape[-1].value
 
@@ -299,12 +336,16 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, train=True):
         q = conv1d(h[:, :T], 'proj_q', n_state)
         k = conv1d(h, 'proj_k', n_state)
         v = conv1d(h, 'proj_v', n_state)
-
+        # add positional encoding
+        k_len = k.shape[1].value
+        # import pdb; pdb.set_trace()
+        q = add_positional_encoding('q', q, k_len - T, k_len,n_attention_layers)
+        k = add_positional_encoding('k', k, 0, k_len,n_attention_layers)
         # only need to create one bst per config
         # we could pass this in as an external param but I like to keep the code more local
         a = blocksparse_attention_impl(q, k, v, heads=4, attn_mode=mode, local_attn_ctx=local_attn_ctx, blocksize=32)
         
-        a = conv1d(a, 'proj_a', n_state, std=0.02/6) # TODO: correct num layers
+        a = conv1d(a, 'proj_a', n_state, std=0.02/n_attention_layers)
         
         if train and dp > 0.0:
             # preserve the dropout mask through recompute

@@ -207,7 +207,7 @@ class Train():
         return self.log_file
 
     def summarize(self, tag, value, lr, step):
-        log_str = '{}: step {:d}- lr = {:.3f}- loss = {:.3f}\n'.format(tag, step, lr, value)
+        log_str = '{}: step={:d}- lr = {:.5f}- loss = {:.3f}\n'.format(tag, step, lr, value)
         print(log_str)
         self.log_file.write(log_str)
         summary_str = tf.Summary(value=[tf.Summary.Value(tag=tag, simple_value=value), ])
@@ -227,8 +227,8 @@ class Train():
             data_batch , bg = next(data_iter)
             decayed_learning_rate = self.args.learning_rate * self.args.decay_rate**(step // self.args.decay_steps)
             feed_dict={self.audio_batch:data_batch, self.begin: bg}
+            feed_dict[self.lr] = decayed_learning_rate
             if is_train:
-                feed_dict[self.lr] = decayed_learning_rate
                 loss_value, lr, _ = self.sess.run([self.loss_train, self.lr, self.train_op], feed_dict=feed_dict)
             else:
                 loss_value, lr = self.sess.run([self.loss_val, self.lr], feed_dict=feed_dict)

@@ -59,6 +59,7 @@ class WaveNet():
 
 
 class MultiHeadSelfAttention():
+    i_layer = 1
     def __init__(self, in_channel, n_dim, block_size , name, mlp_ratio, dp, layers, n_attention_layers):
         # make it deep
         self.layers = layers
@@ -67,6 +68,8 @@ class MultiHeadSelfAttention():
         self.block_size = block_size
         self.scope = name
         self.n_attention_layers = n_attention_layers
+        self.ds_init = n_attention_layers== -1
+        
     def forward(self, x, is_train, memory = None):
         # reshape to blocks before performing attention    
         if self.block_size != -1: 
@@ -83,7 +86,10 @@ class MultiHeadSelfAttention():
                 mode = 'all'
             l_name = self.scope + '_' + str(k)
             # main attention block
-            x = transformer_block(x , memory, scope = l_name , mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio, n_attention_layers=self.n_attention_layers, train=is_train, recompute=is_train)
+            x = transformer_block(x , memory, scope = l_name , mode= mode ,dp =self.dp, mlp_ratio = self.mlp_ratio,\
+                 n_layer=MultiHeadSelfAttention.i_layer if self.ds_init else self.n_attention_layers, ds_init= self.ds_init, train=is_train, recompute=is_train)
+            MultiHeadSelfAttention.i_layer += 1
+
         if self.block_size != -1:
             x = tf.concat([x[i * B:(i + 1) * B] for i in range(x.shape[0] // B)], axis=1)
             if remainder != 0:
@@ -98,6 +104,7 @@ class SampleTransformer():
         self.lbsa = args.lbsa
         self.lsa = args.lsa
         self.lfa = args.lfa
+        self.ds_init = args.ds_init
         self.batch_size = args.batch_size
         self.channel_size = args.channel_size
         self.sample_size = args.sample_size
@@ -108,7 +115,8 @@ class SampleTransformer():
         self.scalar_input = args.scalar_input
         self.output_width1 = self.sample_size + self.receptive_field//2
         self.output_width2 = self.sample_size
-        n_attention_layers = self.lfa + (self.lsa + self.lbsa)*2
+        n_attention_layers = -1 if self.ds_init else self.lfa + (self.lsa + self.lbsa)*2 
+
         with tf.variable_scope('memroy' , reuse=tf.AUTO_REUSE):
             self.memory = tf.get_variable('mem', shape = (args.batch_size , args.n_memory , self.output_width1//np.prod(self.down_sampling_rates) , self.channel_size), initializer=tf.zeros_initializer(), trainable=False)
         self.initial_wavenet = WaveNet(self.channel_size, self.channel_size, self.kernel_size, self.init_kernel_size, self.output_width1, 'wavenet1',  self.dilation_rates)
@@ -141,6 +149,7 @@ class SampleTransformer():
             p_s = np.prod(self.down_sampling_rates[-(d + 1):]) - 1
             h = tf.concat([tf.zeros((B, p_s, C)), h[:, :-p_s]], axis = 1) + inputs[d]
             h = self.up_path[d].forward(h, is_train)
+        MultiHeadSelfAttention.i_layer = 1
         h = self.final_wavenet.forward(h)
         with tf.variable_scope('post' , reuse=tf.AUTO_REUSE):
             return self.post_wavenet(h)

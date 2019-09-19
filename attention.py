@@ -190,14 +190,14 @@ def get_blocksparse_obj(n_ctx, n_heads, attn_mode, blocksize=32, local_attn_ctx=
                 if k_idx + offset >= q_idx and k_idx <= q_idx:
                     layout[q_idx, k_idx] = 1
     if attn_mode == 'all' and n_memory > 0:
-        layout = np.concatenate([layout, np.ones((n_bctx , n_memory*n_bctx), dtype=np.bool)], axis = 1)
+        layout = np.concatenate([np.ones((n_bctx , n_memory*n_bctx), dtype=np.bool), layout], axis = 1)
     bst = BlocksparseTransformer(layout, block_size=blocksize,
-                                 mask_callback=get_callback(attn_mode, local_attn_ctx),
+                                 mask_callback=get_callback(attn_mode, n_memory*n_bctx, local_attn_ctx),
                                  heads=n_heads)
     return bst
 
 
-def get_callback(attn_mode, local_attn_ctx=None):
+def get_callback(attn_mode, mem_size, local_attn_ctx=None):
     '''Defines a function which returns the positionwise sparsity pattern for every block
     that is enabled in the blocksparse object
     '''
@@ -205,7 +205,7 @@ def get_callback(attn_mode, local_attn_ctx=None):
         mask = np.ones(blk_shape, dtype=np.bool)
 
         # on the diagonal blocks mask out the upper diagonal
-        if qry_idx == key_idx:
+        if qry_idx + mem_size == key_idx:
             for q, k in np.ndindex(blk_shape):
                 if k > q:
                     mask[q, k] = 0
@@ -244,7 +244,8 @@ def conv1d(x, scope, nf, std=0.02, relu=False, fast_gelu=False):
         ndims = x.shape.ndims
 
         # Note: param initializers are not particularly well tuned in this code
-        w = tf.get_variable("w", [nx, nf], initializer=tf.random_normal_initializer(stddev=std), dtype=tf.float32)
+        # w = tf.get_variable("w", [nx, nf], initializer=tf.random_normal_initializer(stddev=std), dtype=tf.float32)
+        w = tf.get_variable("w", [nx, nf], initializer=tf.random_uniform_initializer(minval=-std, maxval=std), dtype=tf.float32)
         b = tf.get_variable("b", [    nf], initializer=tf.constant_initializer(0.0), dtype=tf.float32)
 
         # if hps.float16:
@@ -303,14 +304,14 @@ def add_timing_signal_1d_given_position(x,
   return signal
 
 
-def add_positional_encoding(tag, x, start, limit, n_attention_layers):
+def add_positional_encoding(tag, x, start, limit, std):
     t = add_timing_signal_1d_given_position(x , tf.expand_dims(tf.range(start=start, limit=limit), axis=0))
-    PW = tf.get_variable(name='positional_weight_' + tag, shape=(x.shape[-1].value, x.shape[-1].value),initializer=tf.random_normal_initializer(stddev=0.02/n_attention_layers), dtype=tf.float32)
+    PW = tf.get_variable(name='positional_weight_' + tag, shape=(x.shape[-1].value, x.shape[-1].value),initializer=tf.random_uniform_initializer(minval=-std, maxval=std), dtype=tf.float32)
     t = tf.einsum('btc, cd->btd', t, PW)
     return x + t
 
 @bs.recomputable
-def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, n_attention_layers, train=True):
+def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, n_layer, ds_init, train=True):
     """
     core component of transformer
     performs attention + residual mlp + layer normalization
@@ -326,26 +327,28 @@ def transformer_block(x, memory,  scope, mode , dp , mlp_ratio, n_attention_laye
     if memory != None:
         B , N , T_p, C = memory.shape
         memory = tf.reshape(memory , shape=(B, T_p*N, C))
-        x = tf.concat([x, memory], axis=1)
+        x = tf.concat([memory, x], axis=1)
     n_state = x.shape[-1].value
 
-    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+    std_first = np.sqrt(6/(2*n_state))/np.sqrt(n_layer) if ds_init else 0.02
+    std_last = np.sqrt(6/(2*n_state))/np.sqrt(n_layer) if ds_init else 0.02/np.sqrt(n_layer)
 
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        
         h = layernorm(x, "norm_a")
         # h = x
-        q = conv1d(h[:, :T], 'proj_q', n_state)
-        k = conv1d(h, 'proj_k', n_state)
-        v = conv1d(h, 'proj_v', n_state)
+        q = conv1d(h[:, -T:], 'proj_q', n_state, std_first)
+        k = conv1d(h, 'proj_k', n_state, std_first)
+        v = conv1d(h, 'proj_v', n_state, std_first)
         # add positional encoding
         k_len = k.shape[1].value
-        # import pdb; pdb.set_trace()
-        q = add_positional_encoding('q', q, k_len - T, k_len,n_attention_layers)
-        k = add_positional_encoding('k', k, 0, k_len,n_attention_layers)
+        q = add_positional_encoding('q', q, k_len - T, k_len, std_last)
+        k = add_positional_encoding('k', k, 0, k_len, std_last)
         # only need to create one bst per config
         # we could pass this in as an external param but I like to keep the code more local
         a = blocksparse_attention_impl(q, k, v, heads=4, attn_mode=mode, local_attn_ctx=local_attn_ctx, blocksize=32)
-        
-        a = conv1d(a, 'proj_a', n_state, std=0.02/n_attention_layers)
+
+        a = conv1d(a, 'proj_a', n_state, std=std_last)
         
         if train and dp > 0.0:
             # preserve the dropout mask through recompute

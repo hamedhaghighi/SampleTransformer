@@ -225,7 +225,8 @@ class Train():
         step = self.saved_global_step
         for _ in tqdm(range(n_steps), dynamic_ncols=True, desc='Train: ' if is_train else 'Val:'):
             data_batch , bg = next(data_iter)
-            decayed_learning_rate = self.args.learning_rate * self.args.decay_rate**(step // self.args.decay_steps)
+            decayed_learning_rate= min(step * (1.0/self.args.warmup_iters), 1.0) * self.args.learning_rate
+            # decayed_learning_rate = self.args.learning_rate * self.args.decay_rate**(step // self.args.decay_steps)
             feed_dict={self.audio_batch:data_batch, self.begin: bg}
             feed_dict[self.lr] = decayed_learning_rate
             if is_train:

@@ -6,7 +6,7 @@ DATA_DIRECTORY = '/home/oem/.tensorflow/music'
 LOGDIR_ROOT = './logdir'
 PRINT_EVERY = 100
 NUM_EPOCHS = 100
-LEARNING_RATE = 5e-4
+LEARNING_RATE = 3e-4
 WAVENET_PARAMS = './wavenet_params.json'
 SAMPLE_SIZE = 2**15
 L2_REGULARIZATION_STRENGTH = 0  
@@ -17,7 +17,7 @@ METADATA = False
 DECAY_STEPS = 1000
 DECAY_RATE = 0.96
 CHECKPOINT_EVERY = 2000
-
+WARMUP_ITERS = 1000
 def get_arguments():
     def _str_to_bool(s):
         """Convert string to bool (in argparse context)."""
@@ -82,8 +82,11 @@ def get_arguments():
                         'samples. Default: ' + str(SAMPLE_SIZE) + '.')
     parser.add_argument('--decay_steps', type=int, default=DECAY_STEPS,
                         help='.')
+    parser.add_argument('--warmup_iters', type=int, default=WARMUP_ITERS,
+                        help='.')
     parser.add_argument('--decay_rate', type=float, default=DECAY_RATE,
                         help='.')
+    parser.add_argument('--ds_init', action="store_true", default=False)
     parser.add_argument('--l2_regularization_strength', type=float,
                         default=L2_REGULARIZATION_STRENGTH,
                         help='Coefficient in the L2 regularization. '

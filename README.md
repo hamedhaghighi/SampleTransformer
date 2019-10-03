@@ -22,8 +22,8 @@ Our network consists of two wavenets at the begining and the end, sparse transfo
 
 
 ## Usage:
-Install forked [blocksparse]() by compiling the source code.
-Run training use command below:
+Install forked [blocksparse]() by compiling the source code.  
+Run training use command below:  
     python main.py
-
+    
 Generation WIP ...

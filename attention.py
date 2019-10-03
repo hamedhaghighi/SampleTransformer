@@ -306,6 +306,7 @@ def add_timing_signal_1d_given_position(x,
 
 def add_positional_encoding(tag, x, start, limit, std):
     t = add_timing_signal_1d_given_position(x , tf.expand_dims(tf.range(start=start, limit=limit), axis=0))
+    import pdb; pdb.set_trace()
     PW = tf.get_variable(name='positional_weight_' + tag, shape=(x.shape[-1].value, x.shape[-1].value),initializer=tf.random_uniform_initializer(minval=-std, maxval=std), dtype=tf.float32)
     t = tf.einsum('btc, cd->btd', t, PW)
     return x + t

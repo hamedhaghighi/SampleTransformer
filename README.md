@@ -23,8 +23,10 @@ Our network consists of two wavenets (at the beginning and the ), sparse transfo
 
 ## Usage:
 
-Install forked [blocksparse](https://github.com/hamedhaghighi/blocksparse) by compiling the source code.  
-Run training use command below:  
-    python main.py
+Install forked [blocksparse](https://github.com/hamedhaghighi/blocksparse) by compiling the source code. 
+
+For training, use command below:
+
+python main.py
     
 Generation WIP ...
